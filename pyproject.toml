@@ -1,0 +1,18 @@
+[project]
+name = "shopping-ai"
+version = "0.1.0"
+description = "Claude API を使った会話型お買い物アシスタント"
+requires-python = ">=3.10"
+dependencies = ["anthropic>=1.11.0", "fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.scripts]
+shopping-ai = "shopping_ai.cli:run"
+
+[tool.setuptools]
+packages = ["shopping_ai"]
+
+[tool.setuptools.package-data]
+shopping_ai = ["data/*.json", "static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
