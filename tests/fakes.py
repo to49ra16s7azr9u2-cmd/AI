@@ -46,10 +46,19 @@ class _Stream:
 class FakeClient:
     """scripted の順にレスポンスを返す。送られたリクエストは calls に記録する。"""
 
-    def __init__(self, scripted: list[NS]):
+    def __init__(self, scripted: list[NS], suggestions: list[str] | None = None):
         self._scripted = list(scripted)
+        self._suggestions = suggestions or ["もっと安いのは？", "カートに入れて", "違いを詳しく"]
         self.calls: list[dict[str, Any]] = []
+        self.create_calls: list[dict[str, Any]] = []
         self.beta = NS(messages=NS(stream=self._stream))
+        self.messages = NS(create=self._create)
+
+    async def _create(self, **params: Any) -> NS:
+        import json
+
+        self.create_calls.append(params)
+        return message([text(json.dumps({"suggestions": self._suggestions}, ensure_ascii=False))])
 
     def _stream(self, **params: Any) -> _Stream:
         # messages はその後も追記されるので、呼び出し時点のコピーを残す

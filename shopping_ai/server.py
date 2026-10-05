@@ -33,6 +33,12 @@ class ImageIn(BaseModel):
     data: str  # base64（data: URL の接頭辞なし）
 
 
+class CartIn(BaseModel):
+    product_id: str = Field(max_length=32)
+    quantity: int = Field(default=1, ge=1, le=99)
+    option: str = Field(default="", max_length=100)
+
+
 class ChatIn(BaseModel):
     session_id: str | None = Field(default=None, max_length=64)
     message: str = Field(default="", max_length=MAX_MESSAGE_CHARS)
@@ -64,12 +70,32 @@ def create_app(agent: ShoppingAgent | None = None, store: SessionStore | None = 
     async def reset_session(session_id: str) -> dict[str, Any]:
         return app.state.store.reset(session_id).snapshot()
 
+    @app.get("/api/products")
+    async def get_products(ids: str) -> dict[str, Any]:
+        """商品カード表示用。ids はカンマ区切り（最大 12 件）。"""
+        catalog = app.state.agent.catalog
+        products = [catalog.get(i) for i in dict.fromkeys(ids.split(","))][:12]
+        return {"products": [p.detail() for p in products if p is not None]}
+
+    @app.post("/api/session/{session_id}/cart")
+    async def add_cart_item(session_id: str, body: CartIn) -> dict[str, Any]:
+        session = app.state.store.get_or_create(session_id)
+        args = {"product_id": body.product_id, "quantity": body.quantity, "option": body.option}
+        content, is_error = app.state.agent.executor.execute(session, "add_to_cart", args)
+        if is_error:
+            raise HTTPException(400, content)
+        product = app.state.agent.catalog.get(body.product_id)
+        option = f"（{body.option}）" if body.option else ""
+        session.pending_notes.append(f"{product.name}（{product.id}）{option}を {body.quantity} 点カートに追加")
+        return session.snapshot()
+
     @app.delete("/api/session/{session_id}/cart/{product_id}")
     async def remove_cart_item(session_id: str, product_id: str) -> dict[str, Any]:
         session = app.state.store.get(session_id)
         if session is None:
             raise HTTPException(404, "session not found")
-        session.cart.remove(product_id)
+        if session.cart.remove(product_id):
+            session.pending_notes.append(f"{product_id.upper()} をカートから削除")
         return session.snapshot()
 
     @app.post("/api/chat")
@@ -97,7 +123,14 @@ def create_app(agent: ShoppingAgent | None = None, store: SessionStore | None = 
         async def events() -> AsyncIterator[str]:
             async with session.lock:
                 yield _sse({"type": "session", **session.snapshot()})
-                async for ev in app.state.agent.chat(session, body.message, images):
+                agent = app.state.agent
+                failed = False
+                async for ev in agent.chat(session, body.message, images):
+                    failed = failed or ev["type"] == "error"
+                    if ev["type"] == "done" and not failed and agent.settings.enable_suggestions:
+                        suggestions = await agent.suggest_followups(session)
+                        if suggestions:
+                            yield _sse({"type": "suggestions", "items": suggestions})
                     yield _sse(ev)
 
         return StreamingResponse(

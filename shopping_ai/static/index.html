@@ -71,6 +71,19 @@
   .total { display: flex; justify-content: space-between; font-weight: 700; margin-top: 8px; }
   .empty { color: var(--muted); font-size: 13px; }
   .prefs div { font-size: 13px; } .prefs span { color: var(--muted); }
+  .cards { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 6px; align-self: stretch; max-width: 100%; }
+  .card { flex: 0 0 210px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .card .cat { color: var(--muted); font-size: 11px; }
+  .card .name { font-weight: 700; line-height: 1.4; }
+  .card .price { font-size: 16px; font-weight: 700; }
+  .card .rate { color: var(--muted); font-size: 12px; }
+  .card .stock-low { color: var(--error); font-size: 12px; }
+  .card select { font: inherit; font-size: 12px; padding: 4px; border-radius: 8px; border: 1px solid var(--line);
+                 background: var(--panel); color: var(--ink); }
+  .card button { margin-top: auto; font-size: 13px; }
+  .card .added { color: var(--muted); font-size: 12px; text-align: center; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; max-width: 92%; }
   @media (max-width: 820px) {
     .app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
     .main { border-right: 0; min-height: 0; }
@@ -229,7 +242,8 @@ async function send(text) {
   const status = document.createElement("div"); status.className = "status";
   status.innerHTML = '<span class="dot"></span><span>考えています…</span>';
   ai.append(body, status); log.appendChild(ai); scroll();
-  let text_ = "", raf = null;
+  let text_ = "", raf = null, suggestions = [];
+  document.querySelectorAll(".suggest").forEach((el) => el.remove());
   const flush = () => { raf = null; body.innerHTML = md(text_); body.querySelectorAll("a").forEach((a) => { a.target = "_blank"; a.rel = "noopener"; }); scroll(); };
 
   try {
@@ -252,6 +266,7 @@ async function send(text) {
         else if (ev.type === "status") { status.innerHTML = ev.text ? `<span class="dot"></span><span>${esc(ev.text)}</span>` : ""; }
         else if (ev.type === "cart") renderCart(ev.cart);
         else if (ev.type === "preferences") renderPrefs(ev.preferences);
+        else if (ev.type === "suggestions") suggestions = ev.items;
         else if (ev.type === "error") { const e = document.createElement("div"); e.className = "error"; e.textContent = "⚠ " + ev.text; ai.appendChild(e); }
       }
     }
@@ -262,6 +277,57 @@ async function send(text) {
     if (!text_.trim() && !ai.querySelector(".error")) ai.remove();
     busy = false; sendBtn.disabled = false; input.focus();
   }
+  await renderProductCards(text_, ai);
+  renderSuggestions(suggestions);
+}
+
+// 応答に出てきた商品ID（例: EL-001）から商品カードを作る
+async function renderProductCards(text, after) {
+  const ids = [...new Set(text.match(/\b[A-Z]{2}-\d{3}\b/g) || [])].slice(0, 12);
+  if (!ids.length || !after.isConnected) return;
+  let products = [];
+  try { products = (await (await fetch("/api/products?ids=" + ids.join(","))).json()).products; } catch (e) { return; }
+  if (!products.length) return;
+  const row = document.createElement("div"); row.className = "cards";
+  for (const p of products) {
+    const card = document.createElement("div"); card.className = "card";
+    const opts = [];
+    if (p.sizes) opts.push(`<select data-k="size"><option value="">サイズを選択</option>${p.sizes.map((x) => `<option>${esc(x)}</option>`).join("")}</select>`);
+    if (p.colors) opts.push(`<select data-k="color"><option value="">カラーを選択</option>${p.colors.map((x) => `<option>${esc(x)}</option>`).join("")}</select>`);
+    card.innerHTML = `<div class="cat">${esc(p.category)} ・ ${esc(p.id)}</div>
+      <div class="name">${esc(p.name)}</div><div class="cat">${esc(p.brand)}</div>
+      <div class="price">${yen(p.price_jpy)}</div>
+      <div class="rate">★ ${p.rating.toFixed(1)}（${p.reviews.toLocaleString("ja-JP")}件）</div>
+      ${p.stock === 0 ? '<div class="stock-low">在庫切れ</div>' : p.stock <= 10 ? `<div class="stock-low">残り ${p.stock} 点</div>` : ""}
+      ${opts.join("")}
+      <button type="button" class="primary" ${p.stock === 0 ? "disabled" : ""}>カートに入れる</button>`;
+    card.querySelector("button").addEventListener("click", async (e) => {
+      const sels = [...card.querySelectorAll("select")];
+      if (sels.some((x) => !x.value)) { alert("サイズ・カラーを選んでください"); return; }
+      const option = sels.map((x) => x.value).join(" / ");
+      if (!sessionId) return;
+      const r = await fetch(`/api/session/${sessionId}/cart`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_id: p.id, quantity: 1, option }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(data.detail || "追加できませんでした"); return; }
+      renderCart(data.cart);
+      e.target.textContent = "追加しました ✓";
+      setTimeout(() => { e.target.textContent = "カートに入れる"; }, 1500);
+    });
+    row.appendChild(card);
+  }
+  after.after(row); scroll();
+}
+
+function renderSuggestions(items) {
+  if (!items || !items.length) return;
+  const wrap = document.createElement("div"); wrap.className = "suggest";
+  for (const t of items) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = t;
+    b.addEventListener("click", () => send(t));
+    wrap.appendChild(b);
+  }
+  log.appendChild(wrap); scroll();
 }
 
 function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; }

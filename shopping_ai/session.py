@@ -76,6 +76,8 @@ class Session:
     cart: Cart = field(default_factory=Cart)
     # 予算・サイズ・好きなブランド・アレルギーなど、会話から覚えた好み
     preferences: dict[str, str] = field(default_factory=dict)
+    # 画面のボタンで行われた操作の記録。次のユーザー発言と一緒にモデルへ伝える。
+    pending_notes: list[str] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def snapshot(self) -> dict[str, Any]:

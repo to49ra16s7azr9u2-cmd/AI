@@ -36,6 +36,7 @@ def test_chat_stream_and_session_state():
     sid = events[0]["session_id"]
     assert any(e["type"] == "cart" for e in events)
     assert events[-1]["type"] == "done"
+    assert events[-2]["type"] == "suggestions" and len(events[-2]["items"]) == 3
     state = c.get(f"/api/session/{sid}").json()
     assert state["cart"]["total_jpy"] == 6960
     state = c.delete(f"/api/session/{sid}/cart/EL-010").json()
@@ -49,3 +50,20 @@ def test_rejects_bad_input():
     assert c.post("/api/chat", json=bad_img).status_code == 400
     bad_b64 = {"message": "x", "images": [{"media_type": "image/png", "data": "!!!"}]}
     assert c.post("/api/chat", json=bad_b64).status_code == 400
+
+
+def test_products_endpoint_and_ui_cart_notes():
+    c = make_client([message([text("いいですね")])])
+    r = c.get("/api/products", params={"ids": "EL-001,FA-004,NOPE,EL-001"}).json()
+    assert [p["id"] for p in r["products"]] == ["EL-001", "FA-004"]
+    assert "sizes" in r["products"][1]
+
+    # サイズ必須の商品はオプションなしだと 400
+    assert c.post("/api/session/s1/cart", json={"product_id": "FA-004"}).status_code == 400
+    state = c.post("/api/session/s1/cart", json={"product_id": "FA-004", "option": "26.5 / ホワイト"}).json()
+    assert state["cart"]["total_jpy"] == 14300
+
+    # 画面操作は次の発言と一緒にモデルへ伝わる
+    c.post("/api/chat", json={"session_id": "s1", "message": "これで大丈夫？"})
+    sent = c.app.state.agent.client.calls[0]["messages"][0]["content"][0]["text"]
+    assert sent.startswith("[画面操作メモ]") and "FA-004" in sent

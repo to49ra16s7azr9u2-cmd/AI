@@ -33,7 +33,8 @@ def test_request_params():
     run(agent, Session(), "hi")
     p = client.calls[0]
     assert p["model"] == "claude-opus-5-5"
-    assert p["thinking"] == {"type": "adaptive"}
+    assert p["thinking"] == {"type": "adaptive", "display": "updates"}
+    assert "thinking-display-updates-2026-08-18" in p["betas"]
     assert p["output_config"] == {"effort": "high"}
     assert p["fallbacks"] == "default"
     assert "server-side-fallback-2026-07-01" in p["betas"]
@@ -47,7 +48,7 @@ def test_web_can_be_disabled():
     run(agent, Session(), "hi")
     p = client.calls[0]
     assert "web_search" not in [t.get("name") for t in p["tools"]]
-    assert "context_management" not in p and p["betas"] == ["server-side-fallback-2026-07-01"]
+    assert "context_management" not in p and "compact-2026-01-12" not in p["betas"]
 
 
 def test_tool_loop_adds_to_cart():
@@ -137,3 +138,52 @@ def test_sanitize_after_midstream_fallback():
     # フォールバックが無ければ何も変えない
     plain = [NS(type="thinking"), NS(type="text")]
     assert sanitize_for_history(plain) == plain
+
+
+def test_thinking_updates_become_status():
+    from .fakes import _Stream
+
+    class UpdatesStream(_Stream):
+        async def _events(self):
+            yield NS(type="content_block_start", content_block=NS(type="thinking"))
+            yield NS(type="content_block_delta", delta=NS(type="thinking_delta", thinking="在庫を確認します"))
+            async for ev in super()._events():
+                yield ev
+
+    class C(FakeClient):
+        def _stream(self, **params):
+            self.calls.append(params)
+            return UpdatesStream(self._scripted.pop(0))
+
+    agent = ShoppingAgent(Settings(), client=C([message([text("ok")])]))
+    events = run(agent, Session(), "hi")
+    assert {"type": "status", "text": "在庫を確認します"} in events
+
+
+def test_pending_notes_are_sent_once_and_restored_on_failure():
+    agent, client = make_agent([message([text("了解です")])])
+    s = Session()
+    s.pending_notes = ["EL-001 を 1 点カートに追加"]
+    run(agent, s, "これでいいかな")
+    first = client.calls[0]["messages"][0]["content"]
+    assert first[0]["text"].startswith("[画面操作メモ]") and "EL-001" in first[0]["text"]
+    assert s.pending_notes == []
+
+    agent, _ = make_agent([message([], "refusal")])
+    s = Session()
+    s.pending_notes = ["メモ"]
+    run(agent, s, "x")
+    assert s.pending_notes == ["メモ"]
+
+
+def test_suggest_followups_uses_last_exchange_without_touching_history():
+    agent, client = make_agent([message([text("ご予算はどのくらいですか？")])], )
+    s = Session()
+    run(agent, s, "プレゼントを探してる")
+    before = list(s.messages)
+    out = asyncio.run(agent.suggest_followups(s))
+    assert out == ["もっと安いのは？", "カートに入れて", "違いを詳しく"]
+    assert s.messages == before
+    prompt = client.create_calls[0]["messages"][0]["content"]
+    assert "プレゼントを探してる" in prompt and "ご予算" in prompt
+    assert client.create_calls[0]["output_config"]["format"]["type"] == "json_schema"

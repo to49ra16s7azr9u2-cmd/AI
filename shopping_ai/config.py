@@ -24,6 +24,10 @@ class Settings:
     enable_compaction: bool = field(
         default_factory=lambda: os.environ.get("SHOPPING_AI_COMPACTION", "1") not in ("0", "false", "False")
     )
+    # 応答のあとに「次に聞きそうなこと」の候補ボタンを出すか（追加で軽いモデル呼び出しが 1 回発生する）
+    enable_suggestions: bool = field(
+        default_factory=lambda: os.environ.get("SHOPPING_AI_SUGGESTIONS", "1") not in ("0", "false", "False")
+    )
     catalog_path: Path = field(
         default_factory=lambda: Path(os.environ.get("SHOPPING_AI_CATALOG", PACKAGE_DIR / "data" / "catalog.json"))
     )

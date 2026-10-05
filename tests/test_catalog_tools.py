@@ -98,3 +98,31 @@ def test_remember_preference(ex):
 def test_unknown_tool(ex):
     _, err = ex.execute(Session(), "launch_rocket", {})
     assert err
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("ノイキャン", "EL-001"),          # 略語
+        ("いやほん", "EL-001"),            # ひらがな
+        ("ｲﾔﾎﾝ", "EL-001"),               # 半角カナ
+        ("ワイヤレスイヤフォン", "EL-001"),  # 表記ゆれを含む複合語
+        ("コーヒー好き", "FD-001"),         # 接尾辞
+        ("肌荒れ", "BT-001"),             # 悩み → 商品タグ
+        ("防災グッズ", "OD-003"),
+        ("ヘアドライアー", "BT-002"),        # 打ち間違い（あいまい一致）
+    ],
+)
+def test_search_handles_natural_queries(catalog, query, expected):
+    assert expected in [p.id for p in catalog.search(query)]
+
+
+def test_direct_match_ranks_above_synonym(catalog):
+    assert [p.id for p in catalog.search("出産祝い")][0] == "BB-001"
+    assert {p.id for p in catalog.search("5歳 誕生日")[:2]} == {"BB-002", "BB-003"}
+
+
+def test_fuzzy_only_used_when_nothing_matches(catalog):
+    # 「ドライヤー」は完全一致があるので、バイグラムが似ているだけのヘッドホン（ドライバー）は出さない
+    assert [p.id for p in catalog.search("ドライヤー")] == ["BT-002"]
+    assert catalog.search("宇宙船") == []
